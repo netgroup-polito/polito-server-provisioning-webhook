@@ -2,12 +2,13 @@
 Utility functions for webhook payload processing.
 
 This module provides helper functions for safely parsing and handling
-custom parameters from webhook payloads.
+custom parameters from webhook payloads and coordinating server provisioning.
+STRICT MODE: No Fallbacks, Dynamic Provisioning Only.
 """
 import json
 import logging
 from datetime import datetime
-from typing import Dict, Any, Optional, Union
+from typing import Dict, Any, Optional, Union, Tuple, List
 
 from fastapi import Request, HTTPException, status
 from fastapi.responses import JSONResponse
@@ -25,12 +26,6 @@ EVENT_DELETED = 'EVENT_DELETED'
 def parse_custom_parameters(custom_params_str: Optional[str]) -> Dict[str, Any]:
     """
     Safe parsing of custom parameters from webhook payload.
-    
-    Args:
-        custom_params_str: JSON serialized string of custom parameters
-        
-    Returns:
-        Dictionary with custom parameters or empty dict if not present/invalid
     """
     if not custom_params_str:
         return {}
@@ -43,30 +38,12 @@ def parse_custom_parameters(custom_params_str: Optional[str]) -> Dict[str, Any]:
 
 
 def get_custom_parameter(custom_params: Dict[str, Any], key: str, default: Any = None) -> Any:
-    """
-    Get a specific custom parameter with default value.
-    
-    Args:
-        custom_params: Dictionary of custom parameters
-        key: Key of the parameter to get
-        default: Default value if parameter doesn't exist
-        
-    Returns:
-        Parameter value or default value
-    """
+    """Get a specific custom parameter value safely."""
     return custom_params.get(key, default)
 
 
 def has_custom_parameters(custom_params_str: Optional[str]) -> bool:
-    """
-    Check if valid custom parameters are present.
-    
-    Args:
-        custom_params_str: JSON serialized string of custom parameters
-        
-    Returns:
-        True if valid custom parameters are present, False otherwise
-    """
+    """Check if valid custom parameters are present."""
     if not custom_params_str:
         return False
     
@@ -77,15 +54,6 @@ def has_custom_parameters(custom_params_str: Optional[str]) -> bool:
 def parse_timestamp(timestamp_str: str) -> datetime:
     """
     Parse timestamp string to datetime object.
-    
-    Args:
-        timestamp_str: ISO format timestamp string
-        
-    Returns:
-        datetime object
-        
-    Raises:
-        ValueError: If timestamp format is invalid
     """
     try:
         # Replace Z with timezone offset
@@ -93,18 +61,13 @@ def parse_timestamp(timestamp_str: str) -> datetime:
         
         # Handle nanosecond precision by truncating to microseconds
         if '.' in timestamp_str:
-            # Find the decimal point and truncate fractional seconds to 6 digits
             if '+' in timestamp_str:
-                # Has timezone
                 datetime_part, tz_part = timestamp_str.rsplit('+', 1)
                 date_time, fractional = datetime_part.rsplit('.', 1)
-                # Truncate fractional seconds to 6 digits (microseconds)
                 fractional = fractional[:6].ljust(6, '0')
                 timestamp_str = f"{date_time}.{fractional}+{tz_part}"
             else:
-                # No explicit timezone
                 date_time, fractional = timestamp_str.rsplit('.', 1)
-                # Truncate fractional seconds to 6 digits (microseconds)
                 fractional = fractional[:6].ljust(6, '0')
                 timestamp_str = f"{date_time}.{fractional}"
             
@@ -117,16 +80,6 @@ def parse_timestamp(timestamp_str: str) -> datetime:
 async def verify_webhook_signature(request: Request, signature: Optional[str]) -> bytes:
     """
     Verify webhook signature and return raw payload.
-    
-    Args:
-        request: FastAPI request object
-        signature: Signature from webhook header
-        
-    Returns:
-        Raw payload bytes
-        
-    Raises:
-        HTTPException: If signature verification fails
     """
     raw_payload = await request.body()
     
@@ -155,20 +108,68 @@ def handle_provision_event(
     raw_payload: bytes
 ) -> bool:
     """
-    Handle provisioning event for a single server resource. Returns True on success.
+    Handle provisioning event for a single server resource.
+    STRICT MODE: Requires 'imageUrl' and 'checksumUrl' from Frontend.
+    No fallbacks allowed.
     """
     resource_name = payload.resource_name
     event_id = payload.event_id
-    webhook_id = payload.webhook_id
+    webhook_id = str(payload.webhook_id)
     user_id = payload.user_id or "unknown"
 
     try:
+        # 1. STRICT VALIDATION: Check if dynamic image data is present
+        if not payload.image_url or not payload.checksum_url:
+            msg = f"PROVISIONING FAILED: Missing 'imageUrl' or 'checksumUrl' for {resource_name}. No defaults allowed."
+            logger.error(msg)
+            
+            # Send failure notification
+            notification.send_webhook_log(
+                webhook_id=webhook_id, 
+                event_type=EVENT_START, 
+                success=False,
+                payload_data=json.dumps(payload.model_dump()), 
+                response=msg,
+                metadata={"error": "Missing Mandatory Image Config"}
+            )
+            return False
+
+        # 2. Extract Data (No Magic)
+        image_url = payload.image_url
+        checksum = payload.checksum_url
+        
+        # --- LOGICA DI PARSING DINAMICO DEL FORMATO ---
+        # Verifichiamo l'estensione dell'URL per impostare il formato corretto
+        url_lower = image_url.lower()
+        if url_lower.endswith('.qcow2'):
+            detected_format = "qcow2"
+        elif url_lower.endswith('.vmdk'):
+            detected_format = "vmdk"
+        elif url_lower.endswith('.iso'):
+            detected_format = "iso"
+        else:
+            detected_format = "raw"  # Default per .img, .bin o se l'estensione manca
+
+        # Priorità: Formato esplicito dal Frontend > Formato detectato dall'URL
+        image_format = payload.image_format if payload.image_format else detected_format
+        # ----------------------------------------------
+
+        ssh_keys_list = payload.ssh_keys if payload.ssh_keys else []
+        
+        # Checkpoint log con il formato rilevato
+        logger.info(f"Provisioning '{resource_name}' with explicit URL: {image_url} (Detected Format: {image_format})")
+
+        if not ssh_keys_list:
+            logger.warning(f"No SSH keys provided for {resource_name}. Access might be restricted.")
+
+        # 3. Call Kubernetes Service
         success = kubernetes.patch_baremetalhost(
             bmh_name=resource_name,
-            image_url=config.PROVISION_IMAGE,
-            ssh_key=payload.ssh_public_key,
-            checksum=config.PROVISION_CHECKSUM,
-            checksum_type=config.PROVISION_CHECKSUM_TYPE,
+            image_url=image_url,
+            ssh_keys=ssh_keys_list,
+            checksum=checksum,
+            checksum_type="sha256", # Assumiamo sha256 per i link diretti
+            image_format=image_format,
             wait_for_completion=False,
             webhook_id=webhook_id,
             user_id=user_id,
@@ -177,20 +178,22 @@ def handle_provision_event(
         )
         
         if success:
-            # Send webhook log for successful initiation
+            msg = f"Provisioning initiated for '{resource_name}' with custom image"
+            
+            # Send success notification
             if not notification.send_webhook_log(
                 webhook_id=webhook_id,
                 event_type=EVENT_START,
                 success=True,
                 payload_data=json.dumps(payload.model_dump()),
                 status_code=200,
-                response=f"Provisioning initiated for server '{resource_name}'",
+                response=msg,
                 retry_count=0,
                 metadata={"resourceName": resource_name, "userId": user_id, "eventId": event_id}
             ):
                 logger.warning(f"Failed to send webhook log for server '{resource_name}'")
         
-            logger.info(f"[{EVENT_START}] Successfully initiated provisioning for server '{resource_name}' (Event ID: {event_id}). Monitoring in background.")
+            logger.info(f"[{EVENT_START}] {msg} (Event ID: {event_id}).")
             return True
         else:
             logger.error(f"[{EVENT_START}] Failed to start provisioning for server '{resource_name}' (Event ID: {event_id}).")
@@ -202,27 +205,20 @@ def handle_provision_event(
 
 
 def handle_deprovision_event(
-    payload: Union[models.WebhookPayload, models.EventWebhookPayload],
+    payload: models.WebhookPayload,
     raw_payload: bytes
 ) -> bool:
     """
     Handle deprovisioning event for a single server resource. Returns True on success.
     """
-    if isinstance(payload, models.WebhookPayload):
-        resource_name = payload.resource_name
-        event_id = payload.event_id
-        webhook_id = payload.webhook_id
-        user_id = payload.user_id
-    elif isinstance(payload, models.EventWebhookPayload):
-        resource_name = payload.data.resource.name
-        event_id = str(payload.data.id)
-        webhook_id = payload.webhook_id
-        user_id = payload.data.keycloak_id if payload.data else None
-    else:
-        logger.error("Invalid payload type for deprovisioning.")
-        return False
+    # 1. Estrazione diretta dal payload piatto (senza più if/isinstance)
+    resource_name = payload.resource_name
+    event_id = payload.event_id
+    webhook_id = str(payload.webhook_id)
+    user_id = payload.user_id
 
     try:
+        # 2. Chiamata a Kubernetes per il deprovisioning
         success = kubernetes.patch_baremetalhost(
             bmh_name=resource_name,
             image_url=None  # None triggers deprovisioning
@@ -231,7 +227,7 @@ def handle_deprovision_event(
         if success:
             logger.info(f"[{EVENT_END}] Successfully initiated deprovisioning for server '{resource_name}' (Event ID: {event_id}).")
             
-            # Send webhook log for successful deprovisioning
+            # 3. Invio log di notifica
             if event_id and notification.send_webhook_log(
                 webhook_id=webhook_id,
                 event_type=EVENT_END,
