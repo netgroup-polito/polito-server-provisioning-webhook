@@ -205,27 +205,20 @@ def handle_provision_event(
 
 
 def handle_deprovision_event(
-    payload: Union[models.WebhookPayload, models.EventWebhookPayload],
+    payload: models.WebhookPayload,
     raw_payload: bytes
 ) -> bool:
     """
     Handle deprovisioning event for a single server resource. Returns True on success.
     """
-    if isinstance(payload, models.WebhookPayload):
-        resource_name = payload.resource_name
-        event_id = payload.event_id
-        webhook_id = str(payload.webhook_id)
-        user_id = payload.user_id
-    elif isinstance(payload, models.EventWebhookPayload):
-        resource_name = payload.data.resource.name
-        event_id = str(payload.data.id)
-        webhook_id = payload.webhook_id
-        user_id = payload.data.keycloak_id if payload.data else None
-    else:
-        logger.error("Invalid payload type for deprovisioning.")
-        return False
+    # 1. Estrazione diretta dal payload piatto (senza più if/isinstance)
+    resource_name = payload.resource_name
+    event_id = payload.event_id
+    webhook_id = str(payload.webhook_id)
+    user_id = payload.user_id
 
     try:
+        # 2. Chiamata a Kubernetes per il deprovisioning
         success = kubernetes.patch_baremetalhost(
             bmh_name=resource_name,
             image_url=None  # None triggers deprovisioning
@@ -234,6 +227,7 @@ def handle_deprovision_event(
         if success:
             logger.info(f"[{EVENT_END}] Successfully initiated deprovisioning for server '{resource_name}' (Event ID: {event_id}).")
             
+            # 3. Invio log di notifica
             if event_id and notification.send_webhook_log(
                 webhook_id=webhook_id,
                 event_type=EVENT_END,
