@@ -148,7 +148,7 @@ def handle_provision_event(
         elif url_lower.endswith('.iso'):
             detected_format = "iso"
         else:
-            detected_format = "raw"  # Default per .img, .bin o se l'estensione manca
+            detected_format = "raw"  # Default per .bin o se l'estensione manca
 
         # Priorità: Formato esplicito dal Frontend > Formato detectato dall'URL
         image_format = payload.image_format if payload.image_format else detected_format
