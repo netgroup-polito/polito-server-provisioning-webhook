@@ -141,14 +141,14 @@ def handle_provision_event(
         # --- LOGICA DI PARSING DINAMICO DEL FORMATO ---
         # Verifichiamo l'estensione dell'URL per impostare il formato corretto
         url_lower = image_url.lower()
-        if url_lower.endswith('.qcow2'):
+        if url_lower.endswith('.qcow2') or url_lower.endswith('.img'):
             detected_format = "qcow2"
         elif url_lower.endswith('.vmdk'):
             detected_format = "vmdk"
         elif url_lower.endswith('.iso'):
             detected_format = "iso"
         else:
-            detected_format = "raw"  # Default per .img, .bin o se l'estensione manca
+            detected_format = "raw"  # Default .bin o se l'estensione manca
 
         # Priorità: Formato esplicito dal Frontend > Formato detectato dall'URL
         image_format = payload.image_format if payload.image_format else detected_format
