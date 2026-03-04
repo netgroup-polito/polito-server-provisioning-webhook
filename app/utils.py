@@ -141,7 +141,7 @@ def handle_provision_event(
         # --- LOGICA DI PARSING DINAMICO DEL FORMATO ---
         # Verifichiamo l'estensione dell'URL per impostare il formato corretto
         url_lower = image_url.lower()
-        if url_lower.endswith('.qcow2'):
+        if url_lower.endswith('.qcow2') or url_lower.endswith('.img'):
             detected_format = "qcow2"
         elif url_lower.endswith('.vmdk'):
             detected_format = "vmdk"
