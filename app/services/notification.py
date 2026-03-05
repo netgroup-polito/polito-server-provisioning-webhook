@@ -44,28 +44,9 @@ class NotificationService:
     ) -> Dict[str, Any]:
         """
         Create webhook log payload following WebhookLogRequestDTO structure.
-        
-        Args:
-            webhook_id: Webhook identifier
-            event_type: Type of the webhook event
-            payload_data: Webhook payload (max 4000 chars)
-            success: Whether the webhook processing was successful
-            status_code: HTTP status code for the response
-            response: Response message (max 4000 chars)
-            retry_count: Number of retries attempted
-            resource_id: Resource identifier
-            metadata: Additional metadata
-            
-        Returns:
-            Webhook log payload dictionary
         """
-        # Truncate payload if too long
-        if len(payload_data) > 4000:
-            payload_data = payload_data[:3997] + "..."
-            
-        # Truncate response if too long
-        if response and len(response) > 4000:
-            response = response[:3997] + "..."
+        # I limiti di 4000 caratteri sono stati rimossi lato backend (ora usa TEXT)
+        # Quindi inviamo i dati interi senza troncarli.
             
         payload = {
             "webhookId": webhook_id,
@@ -170,7 +151,7 @@ class NotificationService:
                 f"Your bare metal server reservation '{resource_name}' has been successfully "
                 f"provisioned and will be available soon after the system boot completes. "
                 f"This could take some minutes. You can login using SSH with the user 'prognose' "
-                f"and your configured SSH key to the IP address specified in the resource specification."
+                f"and your configured SSH keys to the IP address specified in the resource specification."
             )
             notification_type = "SUCCESS"
             event_type = "PROVISIONING_COMPLETED"
