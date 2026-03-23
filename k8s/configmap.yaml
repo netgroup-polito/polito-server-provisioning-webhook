@@ -8,9 +8,8 @@ data:
   BMH_API_GROUP: "metal3.io"
   BMH_API_VERSION: "v1alpha1"
   BMH_PLURAL: "baremetalhosts"
-  PROVISION_IMAGE: "http://192.168.11.23/images/noble-server-cloudimg-amd64.img"
-  PROVISION_CHECKSUM: "http://192.168.11.23/images/noble-server-cloudimg-amd64.img.sha256sum"
-  PROVISION_CHECKSUM_TYPE: "sha256"
+  
+
   PROVISIONING_TIMEOUT: "2700"  # 45 minutes
   DEPROVISION_IMAGE: ""
   LOG_LEVEL: "INFO"
